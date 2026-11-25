@@ -1,0 +1,64 @@
+
+#Requires -RunAsAdministrator
+
+# Windows 10 / 11 Debloat Script
+
+$apps = @(
+    "Microsoft.Copilot"
+    "Microsoft.MicrosoftOfficeHub"
+    "Microsoft.OneDriveSync"
+    "Microsoft.549981C3F5F10"
+    "*PowerBI*"
+    "Microsoft.Xbox*"
+    "Microsoft.GamingApp"
+    "Microsoft.GamingServices"
+)
+
+Write-Host "Removing Windows bloatware..." -ForegroundColor Cyan
+
+foreach ($app in $apps) {
+    Write-Host "Removing $app..." -ForegroundColor Yellow
+
+    # Remove installed packages for all users
+    Get-AppxPackage -AllUsers -Name $app |
+        ForEach-Object {
+            Remove-AppxPackage -Package $_.PackageFullName -AllUsers
+        }
+
+    # Remove provisioned packages for future users
+    Get-AppxProvisionedPackage -Online |
+        Where-Object { $_.DisplayName -like $app } |
+        ForEach-Object {
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName
+        }
+}
+
+# Remove standalone desktop applications
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+
+    $desktopApps = @(
+        "Microsoft.OneDrive"
+        "Microsoft.PowerBI"
+    )
+
+    foreach ($app in $desktopApps) {
+        Write-Host "Uninstalling $app..." -ForegroundColor Yellow
+
+        winget uninstall --id $app --exact --silent --accept-source-agreements
+    }
+} else {
+    Write-Warning "WinGet unavailable. Check desktop apps manually."
+}
+
+# Disable legacy Windows Copilot
+$path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+
+New-Item -Path $path -Force | Out-Null
+
+Set-ItemProperty -Path $path `
+    -Name "TurnOffWindowsCopilot" `
+    -Value 1 `
+    -Type DWord
+
+Write-Host "`nDebloat process finished." -ForegroundColor Green
+Write-Host "Review any errors and restart your computer." -ForegroundColor Cyan
