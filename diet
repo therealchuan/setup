@@ -1,6 +1,4 @@
 
-#Requires -RunAsAdministrator
-
 # Windows 10 / 11 Debloat Script
 
 $apps = @(
@@ -8,8 +6,13 @@ $apps = @(
     "Microsoft.MicrosoftOfficeHub"
     "Microsoft.OneDriveSync"
     "Microsoft.549981C3F5F10"
-    "*PowerBI*"
-    "Microsoft.Xbox*"
+    "Microsoft.MicrosoftPowerBI"
+    "Microsoft.XboxApp"
+    "Microsoft.XboxGamingOverlay"
+    "Microsoft.XboxGameOverlay"
+    "Microsoft.XboxIdentityProvider"
+    "Microsoft.XboxSpeechToTextOverlay"
+    "Microsoft.Xbox.TCUI"
     "Microsoft.GamingApp"
     "Microsoft.GamingServices"
 )
@@ -17,48 +20,93 @@ $apps = @(
 Write-Host "Removing Windows bloatware..." -ForegroundColor Cyan
 
 foreach ($app in $apps) {
-    Write-Host "Removing $app..." -ForegroundColor Yellow
 
-    # Remove installed packages for all users
-    Get-AppxPackage -AllUsers -Name $app |
-        ForEach-Object {
-            Remove-AppxPackage -Package $_.PackageFullName -AllUsers
+    # Remove installed applications
+    $packages = Get-AppxPackage -AllUsers -Name $app `
+        -PackageTypeFilter Bundle,Main |
+        Sort-Object IsBundle -Descending
+
+    foreach ($pkg in $packages) {
+
+        if ($pkg.NonRemovable) {
+            Write-Host "Protected: $app" -ForegroundColor Yellow
+            continue
         }
 
-    # Remove provisioned packages for future users
+        # Skip packages already removed with their bundle
+        if (-not (Get-AppxPackage -AllUsers -Name $app `
+            -PackageTypeFilter Bundle,Main |
+            Where-Object PackageFullName -eq $pkg.PackageFullName)) {
+            continue
+        }
+
+        try {
+            Remove-AppxPackage -Package $pkg.PackageFullName `
+                -AllUsers -ErrorAction Stop
+
+            Write-Host "Removed: $app" -ForegroundColor Green
+        }
+        catch {
+            Write-Warning "Could not remove $app for all users."
+
+            Get-AppxPackage -Name $app |
+                Where-Object { -not $_.NonRemovable } |
+                ForEach-Object {
+                    try {
+                        Remove-AppxPackage -Package $_.PackageFullName `
+                            -ErrorAction Stop
+
+                        Write-Host "Removed for current user: $app" -ForegroundColor Green
+                    }
+                    catch {
+                        Write-Warning "Skipped: $app"
+                    }
+                }
+        }
+    }
+
+    # Prevent installation for new users
     Get-AppxProvisionedPackage -Online |
-        Where-Object { $_.DisplayName -like $app } |
+        Where-Object { $_.DisplayName -eq $app } |
         ForEach-Object {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName
+            try {
+                Remove-AppxProvisionedPackage -Online `
+                    -PackageName $_.PackageName `
+                    -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Warning "Could not deprovision: $app"
+            }
         }
 }
 
-# Remove standalone desktop applications
+# Remove desktop applications
 if (Get-Command winget -ErrorAction SilentlyContinue) {
 
-    $desktopApps = @(
-        "Microsoft.OneDrive"
-        "Microsoft.PowerBI"
-    )
+    foreach ($app in @("Microsoft.OneDrive", "Microsoft.PowerBI")) {
 
-    foreach ($app in $desktopApps) {
-        Write-Host "Uninstalling $app..." -ForegroundColor Yellow
+        Write-Host "Uninstalling $app..." -ForegroundColor Cyan
 
-        winget uninstall --id $app --exact --silent --accept-source-agreements
+        winget uninstall --id $app --exact --silent `
+            --accept-source-agreements
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "$app not found or uninstall failed."
+        }
     }
-} else {
-    Write-Warning "WinGet unavailable. Check desktop apps manually."
+}
+else {
+    Write-Warning "WinGet unavailable."
 }
 
-# Disable legacy Windows Copilot
-$path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+# Disable legacy Windows Copilot for current user
+$path = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
 
 New-Item -Path $path -Force | Out-Null
 
 Set-ItemProperty -Path $path `
     -Name "TurnOffWindowsCopilot" `
-    -Value 1 `
-    -Type DWord
+    -Value 1 -Type DWord
 
-Write-Host "`nDebloat process finished." -ForegroundColor Green
-Write-Host "Review any errors and restart your computer." -ForegroundColor Cyan
+Write-Host "`nDebloat finished. Review warnings." -ForegroundColor Green
+Write-Host "Restart your computer." -ForegroundColor Cyan
